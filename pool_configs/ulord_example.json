@@ -4,8 +4,6 @@
 
     "address": "uhvrceSiwLWwGz92ZkM4jiXq2uT2VAFYqF",
     "_comment_address": "pools ulord address; ex, ujKNeYth9s1QkW1N6ubSorfKPA9JvkC39D",
-	"_addressUsc": "bf3d5e4d82cf4c499e04d6aed2aa5d8e484b8184",
-    "_comment_addressUsc": "pools usc address; ex, reward_address bf3d5e4d82cf4c499e04d6aed2aa5d8e484b8184",  
 
     "validateWorkerUsername": true,
 

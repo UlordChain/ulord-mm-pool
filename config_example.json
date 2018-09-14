@@ -39,6 +39,10 @@
             "host": "127.0.0.1",
             "port": 6379,
             "password": ""
+        },
+        "usc":{
+            "rpcIp": "localhost",
+            "rpcPort": 58858
         }
     },
 
