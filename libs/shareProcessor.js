@@ -1,8 +1,6 @@
 var redis = require('redis');
 var Stratum = require('stratum-pool');
 var fs = require('fs')
-var path = require('path')
-
 /*
 This module deals with handling shares when in internal payment processing mode. It connects to a redis
 database and inserts shares with the database structure of:
@@ -20,7 +18,7 @@ module.exports = function(logger, poolConfig){
     var redisConfig = poolConfig.redis;
     var coin = poolConfig.coin.name;
 
-    this.moniter = {};
+    this.moniter = '';
     this.blackMembers = [];
     var forkId = process.env.forkId;
     var logSystem = 'Pool';
@@ -28,6 +26,7 @@ module.exports = function(logger, poolConfig){
     var logSubCat = 'Thread ' + (parseInt(forkId) + 1);
     
     var lastRedisSync = 0;
+    var redisCommands = [];
     
     var connection = redis.createClient(redisConfig.port, redisConfig.host);
     if (redisConfig.password) {
@@ -77,15 +76,21 @@ module.exports = function(logger, poolConfig){
         return false;
     }
     this.addMoniter = function(address){
-        this.moniter = address
+        this.moniter = address;
+    }
+    this.removeMoniter = function(){
+        this.moniter = '';
     }
     this.addBlackMember = function(address){
         this.blackMembers.push(address)
     }   
 	this.getBlackMembers = function(){
-        fs.unlink('./logs/blackMembers.log', function(err) {
-            fs.writeFileSync("./logs/blackMembers.log",_this.blackMembers.join(),{flag:'a'});
-        })
+        if(process.env.forkId==0){
+            fs.unlink('./logs/blackMembers.log', function(err) {
+                fs.writeFileSync("./logs/blackMembers.log",_this.blackMembers.join(),{flag:'a'});
+            })
+        }
+        
     }	
 	    this.removeBlackMember = function(address){
         var indexToDelete
@@ -98,35 +103,15 @@ module.exports = function(logger, poolConfig){
             this.blackMembers.splice(indexToDelete,1);
         }
     }
-	
-	/*this.handleUscBlock = function(isValidBlock, height, hash, tx, diff, coin){
-
-        var redisCommands = [];
-
-        if (isValidBlock){
-            redisCommands.push(['rename', coin + ':shares:roundCurrent', coin + ':shares:round' + height]);
-            redisCommands.push(['sadd', coin + ':blocksPending', [hash, tx, height].join(':')]);
-            redisCommands.push(['hincrby', coin + ':stats', 'validBlocks', 1]);
-        }
-        else if (hash){
-            redisCommands.push(['hincrby', coin + ':stats', 'invalidBlocks', 1]);
-        }
-
-        connection.multi(redisCommands).exec(function(err, replies){
-            if (err)
-                logger.error(logSystem, logComponent, logSubCat, 'Error with share processor multi ' + JSON.stringify(err));
-        });
-
-    };*/
-
     this.handleShare = function(isValidShare, isValidBlock, shareData) {
-		var redisCommands = [];
-		shareData.worker = shareData.worker.trim();
+
         if (isValidShare) {
-            if(!!_this.moniter['address'] && shareData.worker.split(".")[0] == _this.moniter.address){
-                fs.writeFileSync('./logs/'+_this.moniter.address+"_moniter.log" , JSON.stringify(shareData)+'\n' , {flag:"a"});
+            if(!!_this.moniter && shareData.worker.split(".")[0] == _this.moniter){
+                connection.zadd(_this.moniter,Date.now(),JSON.stringify(shareData))
             }
-            if(blackMemberFilter(shareData)){return;}
+            if(blackMemberFilter(shareData)){
+                return
+            }
             redisCommands.push(['hincrbyfloat', coin + ':shares:roundCurrent', shareData.worker, shareData.difficulty]);
             redisCommands.push(['hincrby', coin + ':stats', 'validShares', 1]);
             
@@ -139,10 +124,8 @@ module.exports = function(logger, poolConfig){
            doesn't overwrite an existing entry, and timestamp as score lets us query shares from last X minutes to
            generate hashrate for each worker and pool. */
         var dateNow = Date.now();
-		///if (aux != true){
-	        var hashrateData = [ isValidShare ? shareData.difficulty : -shareData.difficulty, shareData.worker, dateNow];
-    	    redisCommands.push(['zadd', coin + ':hashrate', dateNow / 1000 | 0, hashrateData.join(':')]);
-		//}
+        var hashrateData = [ isValidShare ? shareData.difficulty : -shareData.difficulty, shareData.worker, dateNow];
+        redisCommands.push(['zadd', coin + ':hashrate', dateNow / 1000 | 0, hashrateData.join(':')]);
 
         if (isValidBlock){
             redisCommands.push(['rename', coin + ':shares:roundCurrent', coin + ':shares:round' + shareData.height]);

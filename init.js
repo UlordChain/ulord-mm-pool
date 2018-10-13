@@ -39,7 +39,6 @@ try {
         logger.debug('NewRelic', 'Monitor', 'New Relic initiated');
 } catch(e) {}
 
-
 //Try to give process ability to handle 100k concurrent connections
 try{
     var posix = require('posix');
@@ -193,10 +192,10 @@ function roundTo(n, digits) {
 var _lastStartTimes = [];
 var _lastShareTimes = [];
 
+var connection;
+var redisConfig;
 var spawnPoolWorkers = function(){
 
-    var redisConfig;
-    var connection;
     
     Object.keys(poolConfigs).forEach(function(coin){
         var pcfg = poolConfigs[coin];
@@ -356,7 +355,8 @@ var spawnInterval = setInterval(function(){
 
 };
 
-
+var moniterCleanId;
+var moniterWatchConnectionId;
 var startCliListener = function(){
 
     var cliPort = portalConfig.cliPort;
@@ -382,17 +382,59 @@ var startCliListener = function(){
             });
             reply('reloaded pool ' + params[0]);
             break;
-            case 'getConnections':
+            case 'addMoniter':
+            
+            clearInterval(moniterWatchConnectionId)
+            clearInterval(moniterCleanId)
+            connection.hset('Moniter','address',params[0]);
+            connection.hset('Moniter','Threads',portalConfig.clustering.forks.toString());
+            connection.hset('Moniter','connectionsDataVer',Date.now());
+            Object.keys(cluster.workers).forEach(function(id) {
+                cluster.workers[id].send({type: command, address: params[0]});
+            });
+            moniterCleanId = setInterval(function(){
+                connection.zremrangebyscore(params[0],'-inf',Date.now()-300000)
+                connection.zremrangebyscore(params[0]+'_hash','-inf',Date.now()-300000)
+                connection.zremrangebyscore(params[0]+'_share','-inf',Date.now()-300000)
+            },300000)
+            moniterWatchConnectionId = setInterval(function(){
+                if(fs.existsSync('./logs/tcptemp.log')){
+                    fs.unlinkSync('./logs/tcptemp.log');
+                }
+                
+                Object.keys(cluster.workers).forEach(function(id) {
+                    cluster.workers[id].send({type: 'getConnections', address: params[0]});
+                });
+            },30000)
+            reply(command +' '+ params[0]);
+            break;
             case 'addBlackMember':           
             case 'removeBlackMember':
-            case 'recordSubmit':    
             Object.keys(cluster.workers).forEach(function(id) {
                 cluster.workers[id].send({type: command, address: params[0] });
             });
             reply(command +' '+ params[0]);
             break;
+            case 'setPaymentTarget':
+            Object.keys(cluster.workers).forEach(function(id) {
+                cluster.workers[id].send({type: command, target: params[0] });
+            });
+            reply(command +' '+ params[0]);
+            break;
             case 'getBlackMembers':
-            case 'stopRecordSubmit':
+            case 'removeMoniter':
+            connection.del('Moniter')
+            connection.del(params[0])
+            connection.del(params[0]+'_hash')
+            connection.del(params[0]+'_share')
+            clearInterval(moniterWatchConnectionId)
+            clearInterval(moniterCleanId)
+            Object.keys(cluster.workers).forEach(function(id) {
+                cluster.workers[id].send({type: command});
+            });
+            reply("geted");
+            break;
+            case 'getPaymentTarget':
             Object.keys(cluster.workers).forEach(function(id) {
                 cluster.workers[id].send({type: command});
             });
@@ -563,15 +605,12 @@ var startWebsite = function(){
 
     poolConfigs = buildPoolConfigs();
 
-    if(portalConfig.separationMode.enabled && portalConfig.separationMode.mode === "main"){
+    if(portalConfig.separationMode.mode === "main"){
         spawnPoolWorkers();
         startPaymentProcessor();
-    }else if(portalConfig.separationMode.enabled && portalConfig.separationMode.mode === "web"){
         startWebsite();
         start301PR();
-    }else if(!portalConfig.separationMode.enabled){
-        spawnPoolWorkers();
-        startPaymentProcessor();
+    }else if(portalConfig.separationMode.mode === "web"){
         startWebsite();
         start301PR();
     }else {

@@ -1,16 +1,8 @@
-var https = require('https');
-var fs = require('fs');
 var path = require('path');
-
-var async = require('async');
-var redis = require('redis');
 
 var express = require('express');
 var bodyParser = require('body-parser');
 var compress = require('compression');
-
-var Stratum = require('stratum-pool');
-var util = require('stratum-pool/lib/util.js');
 
 var Api = require('./apiEx.js');
 

@@ -101,35 +101,41 @@ module.exports = function(logger){
 					}
                 }
                 break;
-		        case "getConnections":
-                     for(var i in pools){
-                         if(pools[i].stratumServer){
-                               pools[i].stratumServer.getConnections(message.address);                      
-                         }
+                case 'addMoniter':
+                _this.shareProcessor.addMoniter(message.address)
+
+                for(var i in pools){                  
+                     if(pools[i].stratumServer){
+                           pools[i].stratumServer.addMoniter(message.address);
+                           pools[i].jobManager.addMoniter(message.address);                    
                      }
-                     _this.shareProcessor.addMoniter({address:message.address})
+                 }
+                 break;
+                case 'getConnections':
+                for(var i in pools){                  
+                    if(pools[i].stratumServer){
+                          pools[i].stratumServer.getConnections(message.address,message.connectionsDataVer);                  
+                    }
+                }
+                break;
+                case 'removeMoniter':
+                for(var i in pools){
+                    _this.shareProcessor.removeMoniter(message.address)
+                     if(pools[i].stratumServer){
+                           pools[i].stratumServer.removeMoniter(message.address);
+                           pools[i].jobManager.removeMoniter(message.address);                    
+                     }
+                 }
                 break;
                 case "addBlackMember":
-                     _this.shareProcessor.addBlackMember(message.address)
+                    _this.shareProcessor.addBlackMember(message.address)
                 break;
                 case "removeBlackMember":
                     _this.shareProcessor.removeBlackMember(message.address)
                 break;
 				case "getBlackMembers":
                     _this.shareProcessor.getBlackMembers()
-                case "recordSubmit":
-                    for(var i in pools){
-                         if(pools[i].stratumServer){
-                               pools[i].stratumServer.recordSubmit(message.address);                      
-                         }
-                     }
                 break;
-                case 'stopRecordSubmit':
-                   for(var i in pools){
-                         if(pools[i].stratumServer){
-                               pools[i].stratumServer.stopRecordSubmit();                      
-                         }
-                    } 
         }
     });
 
@@ -187,7 +193,6 @@ module.exports = function(logger){
             handlers.share = function(isValidShare, isValidBlock, data){
                 _this.shareProcessor.handleShare(isValidShare, isValidBlock, data);
             };
-			
         }
 
         var authorizeFN = function (ip, port, workerName, password, callback) {
@@ -233,7 +238,7 @@ module.exports = function(logger){
             
             // send to master for pplnt time tracking
             process.send({type: 'shareTrack', thread:(parseInt(forkId)+1), coin:poolOptions.coin.name, isValidShare:isValidShare, isValidBlock:isValidBlock, data:data});
-
+            
         }).on('difficultyUpdate', function(workerName, diff){
             logger.debug(logSystem, logComponent, logSubCat, 'Difficulty update to diff ' + diff + ' workerName=' + JSON.stringify(workerName));
             handlers.diff(workerName, diff);

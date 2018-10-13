@@ -6,13 +6,26 @@ var async = require('async');
 
 var Stratum = require('stratum-pool');
 var util = require('stratum-pool/lib/util.js');
+var nodemailer = require("nodemailer");
+
+// create reusable transport method (opens pool of SMTP connections)
+var smtpTransport = nodemailer.createTransport("SMTP",{
+    service: "QQ",
+    auth: {
+        user: "2479307781@qq.com",
+        pass: "qkvwbtctyexrdiac"
+    }
+});
+
 
 module.exports = function(logger){
 
     var poolConfigs = JSON.parse(process.env.pools);
 
     var enabledPools = [];
-
+    var _this = this;
+    this.entry = [];
+    
     Object.keys(poolConfigs).forEach(function(coin) {
         var poolOptions = poolConfigs[coin];
         if (poolOptions.paymentProcessing &&
@@ -21,9 +34,9 @@ module.exports = function(logger){
     });
 
     async.filter(enabledPools, function(coin, callback){
-        SetupForPool(logger, poolConfigs[coin], function(setupResults){
+        _this.entry.push(new SetupForPool(logger, poolConfigs[coin], function(setupResults){
             callback(null, setupResults);
-        });
+        }));
     }, function(err, results){
         results.forEach(function(coin){
 
@@ -32,28 +45,56 @@ module.exports = function(logger){
             var logSystem = 'Payments';
             var logComponent = coin;
 
-            logger.debug(logSystem, logComponent, 'Payment processing setup to run every '
-                + processingConfig.paymentInterval + ' second(s) with daemon ('
+            logger.debug(logSystem, logComponent, 'Payment processing setup with daemon ('
                 + processingConfig.daemon.user + '@' + processingConfig.daemon.host + ':' + processingConfig.daemon.port
                 + ') and redis (' + poolOptions.redis.host + ':' + poolOptions.redis.port + ')');                
         });
     });
+    process.on('message',function(message){
+        switch(message.type){
+            case 'setPaymentTarget':
+                _this.entry.forEach(function(e){
+                    e.setControlTarget(message.target)
+                })
+            break;
+            case 'getPaymentTarget':
+            _this.entry.forEach(function(e){
+                e.showControlTarget()
+            })
+            break;
+            default:
+            break;
+        }
+    })
 };
 
 function SetupForPool(logger, poolOptions, setupFinished){
 
 
     var coin = poolOptions.coin.name;
-	var coinSymbol = poolOptions.coin.symbol;
     var processingConfig = poolOptions.paymentProcessing;
 
     var logSystem = 'Payments';
     var logComponent = coin;
+    var paymentControl = {
+        lastPaymentTime:null,
+        avaHashs:[]
+    }
 
     var opidCount = 0;
     var opids = [];
-
-    // Ulord team recommends 10 confirmations for safety from orphaned blocks
+    this.setControlTarget = function(target){
+        paymentControl.controlTarget = parseFloat(target)
+        redisClient.set(coin+':paymentsControlTarget',target)
+    }
+    this.showControlTarget = function(){
+        console.log("Current control target is "+paymentControl.controlTarget)
+        redisClient.get(coin+':paymentsControlTarget',function(err,reply){
+            console.log("Current control target from redis is "+reply)
+        })
+    }
+    
+    // zcash team recommends 10 confirmations for safety from orphaned blocks
     var minConfShield = Math.max((processingConfig.minConf || 10), 1); // Don't allow 0 conf transactions.
     var minConfPayout = Math.max((processingConfig.minConf || 10), 1);
     if (minConfPayout  < 3) {
@@ -62,6 +103,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
 
     // minimum paymentInterval of 60 seconds
     var paymentIntervalSecs = Math.max((processingConfig.paymentInterval || 120), 30);
+    var avaHashsCountInterval = processingConfig.paymentControl.avaHashsInterval;
     if (parseInt(processingConfig.paymentInterval) < 120) {
         logger.warning(logSystem, logComponent, ' minimum paymentInterval of 120 seconds recommended.');
     }
@@ -90,72 +132,120 @@ function SetupForPool(logger, poolOptions, setupFinished){
     if (poolOptions.redis.password) {
         redisClient.auth(poolOptions.redis.password);
     }
-
+    if(processingConfig.paymentControl.enabled){
+    redisClient.multi([["zrange",coin+":payments","-1","-1"],["smembers",coin+":paymentsControl"],["get",coin+":paymentsControlTarget"]]).exec(function(err,replies){
+        if(err){
+            logger.error(logSystem, logComponent,
+                'Redis error - Could not start paymentControl. '
+                + JSON.stringify(err));
+            callback(true);
+        }else {
+            paymentControl.lastPaymentTime =replies[0].length!=0?JSON.parse(replies[0][0]).time:Date.now()
+            replies[1].forEach(function(e){
+                paymentControl.avaHashs.push(JSON.parse(e))
+            })
+            paymentControl.controlTarget =replies[2]?parseFloat(replies[2]):poolOptions.paymentProcessing.paymentControl.initControlTarget
+        }
+    })}
     var magnitude;
     var minPaymentSatoshis;
     var coinPrecision;
 
     var paymentInterval;
+    var avaHashsCount;
+    function validateAddress (callback){
+        daemon.cmd('validateaddress', [poolOptions.address], function(result) {
+            if (result.error){
+                logger.error(logSystem, logComponent, 'Error with payment processing daemon ' + JSON.stringify(result.error));
+                callback(true);
+            }
+            else if (!result.response || !result.response.ismine) {
+                logger.error(logSystem, logComponent,
+                    'Daemon does not own pool address - payment processing can not be done with this daemon, '
+                    + JSON.stringify(result.response));
+                callback(true);
+            }
+            else{
+                callback()
+            }
+        }, true);
+    }
+  
+    function getBalance(callback){
+        daemon.cmd('getbalance', [], function(result){
+            if (result.error){
+                return callback(true);
+            }
+            try {
+                var d = result.data.split('result":')[1].split(',')[0].split('.')[1];
+                magnitude = parseInt('10' + new Array(d.length).join('0'));
+                minPaymentSatoshis = parseInt(processingConfig.minimumPayment * magnitude);
+                coinPrecision = magnitude.toString().length - 1;
+            }
+            catch(e){
+                logger.error(logSystem, logComponent, 'Error detecting number of satoshis in a coin, cannot do payment processing. Tried parsing: ' + result.data);
+                return callback(true);
+            }
+            callback();
+        }, true, true);
+    }
 
-	async.parallel([
-		function(callback){
-			daemon.cmd('validateaddress', [poolOptions.address], function(result) {
-				if (result.error){
-					logger.error(logSystem, logComponent, 'Error with payment processing daemon ' + JSON.stringify(result.error));
-					callback(true);
-				}
-				else if (!result.response || !result.response.ismine) {
-					logger.error(logSystem, logComponent,
-						'Daemon does not own pool address - payment processing can not be done with this daemon, '
-						+ JSON.stringify(result.response));
-					callback(true);
-				}
-				else{
-					callback();
-				}
-			}, true);
-		},
-		function(callback){
-			daemon.cmd('getbalance', [], function(result){
-				if (result.error){
-					return callback(true);
-				}
-				try {
-					var d = result.data.split('result":')[1].split(',')[0].split('.')[1];
-					magnitude = parseInt('10' + new Array(d.length).join('0'));
-					minPaymentSatoshis = parseInt(processingConfig.minimumPayment * magnitude);
-					coinPrecision = magnitude.toString().length - 1;
-				}
-				catch(e){
-					logger.error(logSystem, logComponent, 'Error detecting number of satoshis in a coin, cannot do payment processing. Tried parsing: ' + result.data);
-					return callback(true);
-				}
-				callback();
-			}, true, true);
-		}
-	], function(err){
-		if (err){
-			setupFinished(false);
-			return;
-		}
-		if (paymentInterval) {
-			clearInterval(paymentInterval);
-		}
-		paymentInterval = setInterval(function(){
-			var scaleDate = new Date();
-			scaleDate.setHours(0);
-			scaleDate.setMinutes(0);
-			scaleDate.setSeconds(0);
-			var currentDate = new Date();
-			if( ( (currentDate-scaleDate)/1000 ) % paymentIntervalSecs == 0 ){
-				processPayments();
-			}
-		}, 1000);
-
-		//setTimeout(processPayments, 100);
-		setupFinished(true);
-	});
-		
+    function asyncComplete(err){
+        if (err){
+            setupFinished(false);
+            return;
+        }
+        if (paymentInterval) {
+            clearInterval(paymentInterval);
+        }
+        paymentInterval = setInterval(function(){
+            var scaleDate = new Date();
+            scaleDate.setHours(0);
+            scaleDate.setMinutes(0);
+            scaleDate.setSeconds(0);
+            var currentDate = new Date();
+            if(((currentDate-scaleDate)/1000)%paymentIntervalSecs==0){
+                processPayments();
+            }
+        }, 1000);
+        if(processingConfig.paymentControl.enabled){
+            avaHashsCount = setInterval(function(){
+                var scaleDate = new Date();
+                scaleDate.setHours(0);
+                scaleDate.setMinutes(0);
+                scaleDate.setSeconds(0);
+                var currentDate = new Date();
+                if(((currentDate-scaleDate)/1000)%avaHashsCountInterval==0){
+                    processAvaHashsCount();
+                }
+            }, 1000);
+        }
+        
+        //setTimeout(processPayments, 100);
+        setupFinished(true);
+    }
+    function processAvaHashsCount(){
+        request(processingConfig.paymentControl.domain?processingConfig.paymentControl.domain+'/api/poolStats':'http://127.0.0.1:8080/api/poolStats',function(err,response,body){
+            var data = JSON.parse(body)
+            if(err){
+                logger.error(logSystem, logComponent, 'Could not recored avaHashs');
+            }else {
+                redisClient.sadd(coin+":paymentsControl",JSON.stringify({
+                    time:Date.now(),
+                    avaHash:data.hashrateAverage
+                }))
+                paymentControl.avaHashs.push({
+                    time:Date.now(),
+                    avaHash:data.hashrateAverage
+                })
+            }
+        })
+    }
+    if (requireShielding === true) {
+        async.parallel([validateAddress, validateTAddress, validateZAddress, getBalance], asyncComplete);
+    } else {
+        async.parallel([validateAddress, getBalance], asyncComplete);
+    }
     
     //get t_address coinbalance
     function listUnspent (addr, notAddr, minConf, displayBool, callback) {
@@ -418,7 +508,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
 
     // check operation statuses every 57 seconds
     var opid_interval =  57 * 1000;
-    // shielding not required for some cryptohello coins
+    // shielding not required for some equihash coins
     if (requireShielding === true) {
         var checkOpids = function() {
             clearTimeout(opidTimeout);
@@ -592,8 +682,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             serialized: r
                         };
                     });
-					//console.log('step-1', results);
-                    /* sort rounds by block height to pay in order */
+                    /* sort rounds by block hieght to pay in order */
                     rounds.sort(function(a, b) {
                         return a.height - b.height;
                     });
@@ -681,7 +770,6 @@ function SetupForPool(logger, poolOptions, setupFinished){
                          * adds block confirmations count to rounds object
             */
             function(workers, rounds, callback){
-				//console.log('step-2', rounds);
                 // get pending block tx details
                 var batchRPCcommand = rounds.map(function(r){
                     return ['gettransaction', [r.txHash]];
@@ -691,7 +779,6 @@ function SetupForPool(logger, poolOptions, setupFinished){
 
                 startRPCTimer();
                 daemon.batchCmd(batchRPCcommand, function(error, txDetails){
-					//console.log('step-2-1',txDetails);
                     endRPCTimer();
                     if (error || !txDetails){
                         logger.error(logSystem, logComponent, 'Check finished - daemon rpc error with batch gettransactions ' + JSON.stringify(error));
@@ -711,7 +798,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         }
                         var round = rounds[i];
                         // update confirmations for round
-            			if (!tx.result || !tx.result.confirmations) {
+			 if (!tx.result || !tx.result.confirmations) {
                             round.confirmations = 0;
                             logger.error(logSystem, logComponent, 'null result of txDetails[' + i + ']!');
                             logger.error(logSystem, logComponent, 'round =  ' + JSON.stringify(round));
@@ -779,13 +866,51 @@ function SetupForPool(logger, poolOptions, setupFinished){
                                 // if over maxBlocksPerPayment...
                                 // change category to immature to prevent payment
                                 // and to keep track of confirmations/immature balances
-                                if (payingBlocks > maxBlocksPerPayment)
-                                    r.category = 'immature';
                                 return true;
                             default:
                                 return false;
                         };
                     });
+
+                    // 收益补正
+                    var rewardPrev = 0,ChangePerBlock;
+                    function paymentFix(){
+                        var avaHash = paymentControl.avaHashs.filter(function(e){return !!e.avaHash}).reduce(function(init,e){return init+e.avaHash},0)/paymentControl.avaHashs.filter(function(e){return !!e.avaHash}).length
+
+                        var totalPay =  paymentControl.controlTarget*(avaHash/1000)*(Date.now() - paymentControl.lastPaymentTime)/86400000
+                        var rewardRate = (totalPay / (avaHash/1000)) / ((Date.now() - paymentControl.lastPaymentTime)/86400000)
+                        redisClient.set(coin+':rewardRate',rewardRate)
+                        return payingBlocks?totalPay/payingBlocks:payingBlocks
+                    }
+                    if(processingConfig.paymentControl.enabled){
+                        var rewardFix = paymentFix()
+                        rounds.forEach(function(e){
+                            if(e.category === 'generate'){
+                                ChangePerBlock = e.reward - rewardFix
+                                e.reward = rewardFix 
+                            }
+                            
+                        })
+                        
+                    }
+                    /**
+                     *           |-- 记录矿池收益情况 --|
+                     */
+                    console.log(payingBlocks,(ChangePerBlock || '0'))        
+                    var totalChange = (payingBlocks * ChangePerBlock) || "0";
+                    var dataRecord = {
+                        totalChange:totalChange,
+                        timestap:Date.now()
+                    }
+                    redisClient.zadd(coin+':rewardFix',[Date.now(),JSON.stringify(dataRecord)],function(err,reply){
+                        if(err) 
+                            logger.error(logSystem, logComponent, 'Error set RewardFix information.');
+                    })
+                    redisClient.zremrangebyrank(coin+':rewardFix',['0','-16'],function(err,reply){
+                        if(err) 
+                            logger.error(logSystem, logComponent, 'Error set RewardFix information.');
+                    })
+
 
                     // continue to next step in waterfall
                     callback(null, workers, rounds, addressAccount);
@@ -801,7 +926,6 @@ function SetupForPool(logger, poolOptions, setupFinished){
                          * pplnt share reductions if needed
             */
             function(workers, rounds, addressAccount, callback){
-				//console.log('step-3');
                 // pplnt times lookup
                 var timeLookups = rounds.map(function(r){
                     return ['hgetall', coin + ':shares:times' + r.height]
@@ -819,7 +943,6 @@ function SetupForPool(logger, poolOptions, setupFinished){
                     });
                     startRedisTimer();
                     redisClient.multi(shareLookups).exec(function(error, allWorkerShares){
-					//	console.log('step-3-shares', allWorkerShares);
                         endRedisTimer();
                         if (error){
                             callback('Check finished - redis error with multi get rounds share');
@@ -829,7 +952,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         // error detection
                         var err = null;
                         var performPayment = false;
-
+                        var hasGen = false;
                         var notAddr = null;
                         if (requireShielding === true) {
                             notAddr = poolOptions.address;
@@ -837,20 +960,18 @@ function SetupForPool(logger, poolOptions, setupFinished){
 
                         // calculate what the pool owes its miners
                         var feeSatoshi = coinsToSatoshies(fee);
-					//	console.log('fee', feeSatoshi);
                         var totalOwed = parseInt(0);
                         for (var i = 0; i < rounds.length; i++) {
                             // only pay generated blocks, not orphaned, kicked, immature
                             if (rounds[i].category == 'generate') {
                                 totalOwed = totalOwed + coinsToSatoshies(rounds[i].reward) - feeSatoshi;
-								console.log('totalOwed',totalOwed);
+                                hasGen = true
                             }
                         }
                         // also include balances owed
                         for (var w in workers) {
                             var worker = workers[w];
                             totalOwed = totalOwed + (worker.balance||0);
-							console.log('totalOwedBalance', totalOwed);
                         }
                         // check if we have enough tAddress funds to begin payment processing
                         listUnspent(null, notAddr, minConfPayout, false, function (error, tBalance){
@@ -860,12 +981,33 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             } else if (tBalance < totalOwed) {
                                 logger.error(logSystem, logComponent,  'Insufficient funds ('+satoshisToCoins(tBalance) + ') to process payments (' + satoshisToCoins(totalOwed)+'); possibly waiting for txs.');
                                 performPayment = false;
+                                // setup e-mail data with unicode symbols
+                                var mailOptions = {
+                                    from: "优壹矿池 <2479307781@qq.com>", // sender address
+                                    to: processingConfig.alertMail.join(","), // list of receivers
+                                    subject: "通知", // Subject line
+                                    text: "余额不足，应付： "+satoshisToCoins(totalOwed)+"UT，矿池账户余额： "+satoshisToCoins(tBalance)+"UT" , // plaintext body
+                                    html: "<b>余额不足，应付： <span style=\"color:red;\">"+satoshisToCoins(totalOwed)+"UT</span>，矿池账户余额： <span style=\"color:red;\">"+satoshisToCoins(tBalance)+"UT</span></b>" // html body
+                                }
+                                smtpTransport.sendMail(mailOptions, function(error, response){
+                                    if(error){
+                                        console.log(error);
+                                    }else{
+                                        console.log("Message sent: " + response.message);
+                                    }
+                                });
                             } else if (tBalance > totalOwed) {
+
                                 performPayment = true;
                             }
                             // just in case...
                             if (totalOwed <= 0) {
                                 performPayment = false;
+                            }
+                            if (performPayment == true && hasGen == true) {
+                                redisClient.del(coin + ':paymentsControl');
+                                paymentControl.lastPaymentTime = Date.now()
+                                paymentControl.avaHashs.length = 0;
                             }
                             // if we can not perform payment
                             if (performPayment === false) {
@@ -907,10 +1049,10 @@ function SetupForPool(logger, poolOptions, setupFinished){
                                         var immature = coinsToSatoshies(round.reward);
                                         var totalShares = parseFloat(0);
                                         var sharesLost = parseFloat(0);
-                                      //  console.log('step-3-1', immature);
+                                        
                                         // adjust block immature .. tx fees
                                         immature = Math.round(immature - feeSatoshi);
-                                      //  console.log('immature', immature);
+                                        
                                         // find most time spent in this round by single worker
                                         maxTime = 0;
                                         for (var workerAddress in workerTimes){
@@ -937,13 +1079,12 @@ function SetupForPool(logger, poolOptions, setupFinished){
                                             }
                                             worker.roundShares = shares;
                                             totalShares += shares;
-											console.log('shares', totalShares);
                                         }
                                         
-                                        console.log('--IMMATURE DEBUG--------------');
+                                        //console.log('--IMMATURE DEBUG--------------');
                                         //console.log('performPayment: '+performPayment);
                                         //console.log('blockHeight: '+round.height);
-                                        console.log('totalShares: '+totalShares);
+                                        //console.log('blockReward: '+Math.round(immature));
                                         //console.log('blockConfirmations: '+round.confirmations);
                                         
                                         // calculate rewards for round
@@ -1054,10 +1195,10 @@ function SetupForPool(logger, poolOptions, setupFinished){
                If not sending the balance, the differnce should be +(the amount they earned this round)
             */
             function(workers, rounds, addressAccount, callback) {
-			//	console.log('step-4', workers);
+
                 var tries = 0;
                 var trySend = function (withholdPercent) {
-                   
+                    
                     var addressAmounts = {};
                     var balanceAmounts = {};
                     var shareAmounts = {};
@@ -1065,13 +1206,13 @@ function SetupForPool(logger, poolOptions, setupFinished){
                     var minerTotals = {};
                     var totalSent = 0;
                     var totalShares = 0;
+                    
                     // track attempts made, calls to trySend...
                     tries++;
-                    //console.log('workers', workers);
+                    
                     // total up miner's balances
                     for (var w in workers) {
                         var worker = workers[w];
-						//console.log('step-4-1', worker);
                         totalShares += (worker.totalShares || 0)
                         worker.balance = worker.balance || 0;
                         worker.reward = worker.reward || 0;
@@ -1084,7 +1225,6 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             minerTotals[address] = toSendSatoshis;
                         }
                     }
-				//	console.log('step-4-2');
                     // now process each workers balance, and pay the miner
                     for (var w in workers) {
                         var worker = workers[w];
@@ -1092,6 +1232,22 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         worker.reward = worker.reward || 0;
                         var toSendSatoshis = Math.round((worker.balance + worker.reward) * (1 - withholdPercent));
                         var address = worker.address = (worker.address || getProperAddress(w.split('.')[0])).trim();
+			switch(address){
+                            case "UhfMqRx6D6rS66taN5rYP5PUY8YziJ9Qni":
+                            case "UVLNBT3xqqcy3USaGSPuvlhHiJNdfmD5zT":
+                            case "Ugf1kQj8gpTGazYae1zW4ktPzTqKXdJ7jf":
+                            case "UKPsPu9ZhH8S2Fn74enxXVZg1bF72pgp5z":
+                            case "UL21LZyXkjKXRodHUx7vZ36cpxV7hZ5Vrx":
+                            case "UcB4RmvJvYb5rGz2ACFsWpzSSKc1Jrec1h":
+                            case "UVLNBT3xqqcy3USaGSPuv1hHijNdfmD5zT":
+                            case "UkRKwCyQbcdHMWdvzfvTNfFHxHNt4Y6nYh":
+                            case "UVZz2HpfQ9279khJJcGMeACqVnv32rlklK":
+                            case "UdJKHR3xUhvz6ZPJXT6AD558xzoFcEhDYH":
+                            case "UPbAyQibACzK81uM7Z2Tqyaq2zhWf49Kvv":
+                            case "UZu3fxnriyB7EXtQ8ngnHqo4YBura4FYs9":
+			    case "Uj4viwMUqTv8nf57LeSkNwCeCwT87r1T6S":
+                                address = "UYcTCmnGDonF4CYBjww6mNsk9MvnG1gEq6";
+                        }
                         // if miners total is enough, go ahead and add this worker balance
                         if (minerTotals[address] >= minPaymentSatoshis) {
                             totalSent += toSendSatoshis;
@@ -1125,27 +1281,26 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             }
                         }
                     }
-				//	console.log('step-4-3', addressAmounts);
+
                     // if no payouts...continue to next set of callbacks
                     if (Object.keys(addressAmounts).length === 0){
                         callback(null, workers, rounds, []);
                         return;
                     }
-                    //console.log('step-4-4');
+                    
                     // do final rounding of payments per address
                     // this forces amounts to be valid (0.12345678)
                     for (var a in addressAmounts) {
                         addressAmounts[a] = coinsRound(addressAmounts[a]);
                     }
-				//	console.log('step-4-5');
-					// point of no return! good luck!
-                    // we are sending payment cmd to daemon
+
+                    // POINT OF NO RETURN! GOOD LUCK!
+                    // WE ARE SENDING PAYMENT CMD TO DAEMON
                     
                     // perform the sendmany operation .. addressAccount
-                    var rpccallTracking = 'sendmany = '+JSON.stringify(addressAmounts);
-                    console.log('rpcCallTracking', rpccallTracking);
+                    var rpccallTracking = 'sendmany "" '+JSON.stringify(addressAmounts);
+                    console.log(rpccallTracking);
                     daemon.cmd('sendmany', ["", addressAmounts], function (result) {
-						console.log('payments', result);
                         // check for failed payments, there are many reasons
                         if (result.error && result.error.code === -6) {
                             // check if it is because we don't have enough funds
@@ -1154,7 +1309,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                                 if (tries < 5) {
                                     // we thought we had enough funds to send payments, but apparently not...
                                     // try decreasing payments by a small percent to cover unexpected tx fees?
-                                    var higherPercent = withholdPercent + 0.01; // 1%
+                                    var higherPercent = withholdPercent + 0.01; // 0.1%
                                     logger.warning(logSystem, logComponent, 'Insufficient funds (??) for payments ('+satoshisToCoins(totalSent)+'), decreasing rewards by ' + (higherPercent * 100).toFixed(1) + '% and retrying');
                                     trySend(higherPercent);
                                 } else {
@@ -1393,16 +1548,19 @@ function SetupForPool(logger, poolOptions, setupFinished){
     // If not provided - you support the development of btg-nomp
     var getProperAddress = function(address){
 
-        if (address.length > 34){
-            logger.warning(logSystem, logComponent, 'Invalid address '+address+', convert to address '+(poolOptions.invalidAddress || poolOptions.address));
-            return (poolOptions.invalidAddress || poolOptions.address);
+        if (address.length < 25 || address.length > 34) {
+            return (poolOptions.invalidAddress || (poolOptions.testnet === true ? "t9eg2FbHL9XhPUWn51n42G1WDSD8Gvki7H" : "NZXgrwJ1hw1Stn9JzGsMTjqvakcSRixu6y"));
         }
-        if (address.length < 25) {
-            logger.warning(logSystem, logComponent, 'Invalid address '+address+', convert to address '+(poolOptions.invalidAddress || poolOptions.address));
-            return (poolOptions.invalidAddress || poolOptions.address);
-        }
-        return address;
 
+        if (poolOptions.testnet === true && address[0] !== 'm' && address[0] !== 't' && address[0] !== '2') {
+            return (poolOptions.invalidAddress || "t9eg2FbHL9XhPUWn51n42G1WDSD8Gvki7H");
+        }
+
+        if (poolOptions.testnet === false && address[0] !== 'N') {
+            return (poolOptions.invalidAddress || "NZXgrwJ1hw1Stn9JzGsMTjqvakcSRixu6y");
+        }
+
+        return address;
     };
 
 }

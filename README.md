@@ -1,4 +1,4 @@
-# A merge mining pool for Ulord and USC.
+# Ulord - Node Open Mining Portal
 
 
 This is a Cryptohello mining pool based on the Node Open Mining Portal.
@@ -43,8 +43,8 @@ Clone the repository and run `npm update` for all the dependencies to be install
 sudo apt-get install build-essential libsodium-dev npm
 sudo npm install n -g
 sudo n 4.8.7
-git clone https://github.com/UlordChain/ulord-mm-pool.git ulord-mm-pool
-cd ulord-mm-pool
+git clone https://github.com/UlordChain/ulord-node-stratum-pool.git ulord-node-stratum-pool
+cd ulord-node-stratum-pool
 npm update
 ```
 
@@ -102,6 +102,11 @@ the `node-stratum-pool` and `node-multi-hashing` modules, and any config files t
 * Run `npm update` to force updating/reinstalling of the dependencies.
 * Compare your `config.json` and `pool_configs/coin.json` configurations to the latest example ones in this repo or the ones in the setup instructions where each config field is explained. <b>You may need to modify or add any new changes.</b>
 
+Donations
+-------
+To support development of this project feel free to donate :)
+* UT: UW9axn8wtuwbkr2SRmo4vUraTc7tRycQF3
+
 
 Donations
 -------
@@ -113,13 +118,13 @@ PS: The donated UT flows to Ulord community foundation and is supervised by the 
 
 Credits
 -------
-### Z-NOMP
+Z-NOMP
 * [Joshua Yabut / movrcx](https://github.com/joshuayabut)
 * [Aayan L / anarch3](https://github.com/aayanl)
 * [hellcatz](https://github.com/hellcatz)
 
-### NOMP
-* [Jack Chen / UlordChain](https://github.com/UlordChain/) - Ulord and USC
+NOMP
+* [ZyanWlayor / UlordChain](https://github.com/UlordChain/) - Ulord
 * [Jerry Brady / mintyfresh68](https://github.com/bluecircle) - got coin-switching fully working and developed proxy-per-algo feature
 * [Tony Dobbs](http://anthonydobbs.com) - designs for front-end and created the NOMP logo
 * [LucasJones](//github.com/LucasJones) - got p2p block notify working and implemented additional hashing algos
@@ -130,7 +135,7 @@ Credits
 * [svirusxxx](//github.com/svirusxxx) - sponsored development of MPOS mode
 * [icecube45](//github.com/icecube45) - helping out with the repo wiki
 * [Fcases](//github.com/Fcases) - ordered me a pizza <3
-* Those that contributed to [node-merged-pool](//github.com/UlordChain/node-merged-pool#credits)
+* Those that contributed to [node-stratum-pool](//github.com/UlordChain/node-stratum-pool#credits)
 
 
 License

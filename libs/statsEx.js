@@ -126,7 +126,7 @@ var stats = module.exports = function(logger){
 			['zrange', 'ulord:payments', -100, -1],
 			['zrangebyscore', 'ulord:hashrate', windowTime, '+inf'],
 			['hgetall','ulord:shares:roundCurrent'],
-                	['hgetall', 'ulord:blocksPendingConfirms']
+			['get','ulord:rewardRate']
 			]).exec(function(err,replies){
 				var workerStats = {};
 				var minerStats = {};
@@ -138,7 +138,6 @@ var stats = module.exports = function(logger){
 				_this.cacheStats.networkSols = getReadableNetworkHashRateString(replies[1].networkSols)
 				_this.cacheStats.blocksPending = replies[2];
 				_this.cacheStats.blocksConfirmed = replies[3];
-				_this.cacheStats.blocksPendingConfirms = replies[7];
 				_this.cacheStats.payments = replies[4];
 				replies[5].forEach(function(e,i){
 					var workerName = e.split(":")[1];
@@ -191,7 +190,8 @@ var stats = module.exports = function(logger){
 				_this.cacheStats.totalHashrate = shareMultiplier * totalHashrate / portalConfig.website.stats.hashrateWindow;
 				_this.cacheStats.workerStats = workerStats;
 				_this.cacheStats.minerStats = minerStats;
-				_this.cacheStats.totalShares = totalShares;	
+				_this.cacheStats.totalShares = totalShares;
+				_this.cacheStats.rewardRate = replies[7] || '暂无数据';
 				_this.cacheStats.time = new Date().valueOf();
 				for(var i in _this.cacheStats.workerStats){
 					workerCounts++;
@@ -204,11 +204,11 @@ var stats = module.exports = function(logger){
 				_this.cacheStatsLite = JSON.parse(JSON.stringify(_this.cacheStats))
 				delete _this.cacheStatsLite["blocksPending"];
 				delete _this.cacheStatsLite["blocksConfirmed"];
-				delete _this.cacheStatsLite["blocksPendingConfirms"];
 				delete _this.cacheStatsLite["payments"];
 				delete _this.cacheStatsLite["workerCounts"];
 				delete _this.cacheStatsLite["minerCounts"];
 				delete _this.cacheStatsLite["totalShares"];
+				delete _this.cacheStatsLite["rewardRate"];
 				for(var i in _this.cacheStatsLite.workerStats){
 					delete _this.cacheStatsLite.workerStats[i].Diff;
 				}
@@ -270,8 +270,6 @@ var stats = module.exports = function(logger){
 					return result.sort(sortMinerList);
 				})()
 				_this.BlockList = (function(){
-					//console.log('blocksPending', _this.cacheStats.blocksPending.length);
-					//console.log('blocksPendingConfirms', _this.cacheStats.blocksPendingConfirms);
 					var blockList = _this.cacheStats.blocksPending.concat(_this.cacheStats.blocksConfirmed);
 					var currentDate = new Date();
 					var currentDay = currentDate.getDate();
@@ -293,7 +291,6 @@ var stats = module.exports = function(logger){
 				})()
 				delete _this.cacheStats.blocksPending;
 				delete _this.cacheStats.blocksConfirmed;
-				delete _this.cacheStats.blocksPendingConfirms;
 				_this.dataReady = true;
 				redisClient.multi([
 					['zadd','statHistoryLite',_this.cacheStats.time,_this.cacheStatsString],
@@ -324,7 +321,8 @@ var stats = module.exports = function(logger){
 				networkDiff:_this.cacheStats.networkDiff||"",
 				networkSols:_this.cacheStats.networkSols||"",
 				totalHashrate:_this.cacheStats.totalHashrate,		
-				hashrateAverage:hashrateAverage									
+				hashrateAverage:hashrateAverage,
+				rewardFix:_this.cacheStats.rewardRate
 			}
 		}
 		this.getBlockList = function(index){
