@@ -42,7 +42,7 @@
         "nonce": "^1.0.4",
         "redis": "^2.8.0",
         "request": "^2.83.0",
-        "stratum-pool": "git+https://github.com/UlordChain/node-stratum-pool.git",
+        "stratum-pool": "git+https://github.com/UlordChain/node-merged-pool.git",
         "nodemailer": "0.7"
     },
     "engines": {
