@@ -50,5 +50,9 @@
     },
     "scripts": {
         "start": "node init.js"
+    },
+    "devDependencies": {
+        "node-bitcoin-rpc": "^1.1.3",
+        "web3": "^1.0.0-beta.34"
     }
 }
