@@ -52,6 +52,15 @@ npm update
 
 You must change the daemon address to the same as the step 0 configuration. Note that there are two places to change. If your redis is configured with a password, modify it together.Configuration file located in `./config.json`.
 
+The config_example.json file adds the USC configuration switch as follows:
+```
+"usc":{
+    "enabled": true,
+    "rpcIp": "localhost",
+    "rpcPort": 58858
+}
+```
+
 ##### 3) Pool config
 
 You can custom your configuration by modify file `pool_config/ulord.json`.The most important thing is to change pool address to yours.
