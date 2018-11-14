@@ -95,8 +95,8 @@ output from Z-NOMP.
 * Use [New Relic](http://newrelic.com/) to monitor your Z-NOMP instance and server performance.
 
 #### Upgrading Z-NOMP
-Our bitcoin ulord pool based on Z-nomp. When updating Z-NOMP to the latest code its important to not only `git pull` the latest from this repo, but to also update
-the `node-stratum-pool` and `node-multi-hashing` modules, and any config files that may have been changed.
+Our ulord pool based on Z-nomp. When updating Z-NOMP to the latest code its important to not only `git pull` the latest from this repo, but to also update
+the `node-merged-pool` and `node-multi-hashing` modules, and any config files that may have been changed.
 * Inside your Z-NOMP directory (where the init.js script is) do `git pull` to get the latest Z-NOMP code.
 * Remove the dependenices by deleting the `node_modules` directory with `rm -r node_modules`.
 * Run `npm update` to force updating/reinstalling of the dependencies.
@@ -130,7 +130,7 @@ NOMP
 * [svirusxxx](//github.com/svirusxxx) - sponsored development of MPOS mode
 * [icecube45](//github.com/icecube45) - helping out with the repo wiki
 * [Fcases](//github.com/Fcases) - ordered me a pizza <3
-* Those that contributed to [node-stratum-pool](//github.com/UlordChain/node-stratum-pool#credits)
+* Those that contributed to [node-merged-pool](//github.com/UlordChain/node-merged-pool#credits)
 
 
 License
