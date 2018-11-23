@@ -144,6 +144,6 @@ NOMP
 
 License
 -------
-Released under the MIT License. See LICENSE file.
+Released under the MIT License. See [LICENSE](https://github.com/UlordChain/ulord-mm-pool/blob/master/LICENSE) file.
 
 
